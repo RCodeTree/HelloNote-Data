@@ -87,6 +87,8 @@ FROM notes GROUP BY user_id, DATE(created_at);
 
 **事务一致性**：`NoteRepository` 的写方法原本各自 `commit()`。埋点调用 `ActivityRepository.add()`（只 `db.execute`、不提交），紧接在同一 `commit()` 之前，保证「笔记写入」与「活跃度累加」落在**同一事务**，不会出现笔记成功但活跃度丢失。
 
+**启动自愈**：后端 `lifespan` 用 `UserActivity.__table__.create(checkfirst=True)` 幂等创建该新表（仅建新表、绝不改动既有表/数据）。这是防御性兜底——即使尚未执行迁移脚本，笔记增/改/删的埋点也不会因「缺表」而拖累主业务；结构规范化与历史回填仍以 `sql_v3.sql` 为准。
+
 ## 六、版本约定（沿用 V1/V2）
 
 - 数据库：`hello_note`，MySQL 8.0+，InnoDB，utf8mb4 / utf8mb4_0900_ai_ci；
