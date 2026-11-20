@@ -1,38 +1,61 @@
-
 -- ==========================================
 -- Hello!Note Database Structure — V4
 -- Version: V4 (evolution of V3)
 -- Database: hello_note
 -- MySQL: 8.0+
+-- Charset: utf8mb4 / utf8mb4_0900_ai_ci
+-- Engine: InnoDB
 -- ==========================================
 --
--- V4 相对 V3 的唯一结构变更：
---   * users 表新增 `bio VARCHAR(500) NULL COMMENT '个人简介'`
---     用于支撑「个人中心」的自我介绍展示与编辑（PATCH /api/v1/auth/me）。
---   * V4 不改动 V3 的 notes / tags / note_tags / attachments / user_activity 五张表，
---     因此升级段只有一条针对 users 的 ALTER TABLE（幂等封装）。
+-- 【版本演进总览】
+--   V1 (sql/v1/sql_v1.sql)
+--     初始建库，5 张表：users / notes / tags / note_tags / attachments。
+--   V2 (sql/v2/sql_v2.sql)
+--     notes 新增 format VARCHAR(16) NOT NULL DEFAULT 'markdown'
+--     （markdown 需解析可预览 / text 纯文本），其余 4 张表不变。
+--   V3 (sql/v3/sql_v3.sql)
+--     新增 user_activity 表（用户每日活跃度：增/改/删点数 + 活跃时长），
+--     支撑「面板」的日历 / 热力图 / 活动时长统计；其余 5 张表不变。
+--   V4 (本文件)
+--     users 新增 bio VARCHAR(500) NULL COMMENT '个人简介'，
+--     支撑「个人中心」的自我介绍展示与编辑（PATCH /api/v1/auth/me）。
 --
--- 幂等说明：
+-- 【V4 变更说明】
+--   * 唯一结构变更：users 表增加 bio 列。
+--   * V4 没有新增表，也没有改动 notes / tags / note_tags / attachments /
+--     user_activity 五张表，因此「升级段」只有一条针对 users 的 ALTER TABLE。
+--   * 存量数据：bio 允许 NULL，加列后旧用户 bio 均为 NULL，前端显示为空简介，
+--     不影响登录 / 笔记 / 面板等既有功能。
+--
+-- 【幂等说明】
 --   MySQL 8.0 不支持 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，
---   因此用「存储过程 + information_schema.COLUMNS 判断」包装，重复执行不会报错。
---   存储过程的 DELIMITER 是 mysql 客户端指令，请用 `mysql -u root -p < sql_v4.sql`
---   或任意支持 DELIMITER 的 MySQL 客户端整体执行本文件。
+--   因此用「存储过程 + information_schema.COLUMNS 判断」包装：
+--   列已存在则跳过，重复执行本文件不会报错，也不会重复加列。
+--   若客户端不支持 DELIMITER（如部分 GUI / 程序化执行），
+--   可改用第一部分 1.2 的 PREPARE 动态 SQL 备选写法。
 --
--- 本文件可直接在「已有 V3 库」上整体执行：
---   - 第一部分（V3→V4 更新 SQL）：幂等加列，重复运行安全；
---   - 第二部分（V4 完整 users 表结构）：仅作注释参考，执行时不会生效。
+-- 【文件结构】
+--   第一部分：V3 → V4 升级 SQL（活动 SQL，直接在已有 V3 库上执行）。
+--   第二部分：V4 从零初始化「全部 6 张表」的完整语句（已注释，
+--             新库使用时整段去掉行首 `-- ` 执行即可，无需再跑 v1/v2/v3）。
+--   第三部分：升级后的验证查询（注释，可选执行）。
 --
--- 若需从零初始化 V4 库：把第二部分 users 建表注释去掉执行即可（其余表沿用 V3）。
+-- 【执行方式】
+--   升级已有库：  mysql -u root -p < sql_v4.sql
+--   从零初始化：  复制第二部分、去掉每行行首的 `-- ` 后执行；
+--                 或按顺序执行 v1 → v2 → v3 → v4（v4 只需第一部分）。
+--   注意：存储过程的 DELIMITER 是 mysql 客户端指令，须用支持它的客户端整体执行。
 -- ==========================================
 
 
 -- ==========================================
--- 第一部分：V3 → V4 更新 SQL（在已有 V3 库上执行，幂等）
+-- 第一部分：V3 → V4 升级 SQL（在已有 V3 库上执行，幂等）
 -- ==========================================
 
 USE hello_note;
 
--- 1.1 给 users 增加 bio 列（存在则跳过；可反复执行）
+-- 1.1 给 users 增加 bio 列（列已存在则跳过；可反复执行）
+--     用 DATABASE() 而非硬编码库名，切换 schema 后仍安全。
 DROP PROCEDURE IF EXISTS sp_v4_add_users_bio;
 
 DELIMITER $$
@@ -56,42 +79,256 @@ CALL sp_v4_add_users_bio();
 DROP PROCEDURE IF EXISTS sp_v4_add_users_bio;
 
 
+-- 1.2 备选写法（当客户端不支持 DELIMITER 时，用 PREPARE 动态 SQL 替代 1.1）
+--     二选一即可；两者都保留是为了兼容不同 MySQL 客户端。
+-- SET @has_bio = (
+--     SELECT COUNT(*) FROM information_schema.COLUMNS
+--     WHERE TABLE_SCHEMA = DATABASE()
+--       AND TABLE_NAME = 'users'
+--       AND COLUMN_NAME = 'bio'
+-- );
+-- SET @sql = IF(
+--     @has_bio = 0,
+--     "ALTER TABLE users ADD COLUMN bio VARCHAR(500) NULL COMMENT '个人简介'",
+--     "SELECT 'users.bio already exists, skip.' AS result"
+-- );
+-- PREPARE stmt FROM @sql;
+-- EXECUTE stmt;
+-- DEALLOCATE PREPARE stmt;
+
+
 -- ==========================================
--- 第二部分：V4 完整 users 表结构（仅作参考，已注释；从零初始化时去掉注释执行）
+-- 第二部分：V4 从零初始化全部表（仅作参考，已注释）
 -- ==========================================
--- 说明：以下为 V4 最终 users 表结构，相比 V3 仅多一列 bio。
---       从零建库时去掉行首 `-- ` 执行；其余表（notes / tags / note_tags /
---       attachments / user_activity）沿用 sql/v3/sql_v3.sql 的定义。
+-- 说明：以下是 V4 最终结构的全部 6 张表，按外键依赖顺序排列：
+--        1. users          用户（V4 含 bio）
+--        2. notes          笔记（V2 含 format）
+--        3. tags           标签
+--        4. note_tags      笔记-标签关联
+--        5. attachments    附件
+--        6. user_activity  每日活跃度（V3 新增）
+--       从零建库时整段去掉行首 `-- ` 执行即可；此时没有存量笔记，无需数据回填。
+--       各字段的 COMMENT 与 ORM 模型 / API schema 一一对应。
+--
+-- CREATE DATABASE IF NOT EXISTS hello_note
+--     CHARACTER SET utf8mb4
+--     COLLATE utf8mb4_0900_ai_ci;
+--
+-- USE hello_note;
+--
 --
 -- -- ==========================================
--- -- 1. users
--- -- 用户表（V4 新增 bio 个人简介）
+-- -- 1. users  用户表
+-- --    V1 建表；V4 新增 bio 列。
+-- --    密码只存 hash，永不存明文。
 -- -- ==========================================
 --
 -- CREATE TABLE users (
---     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+--     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '用户 ID（自增主键）',
 --
---     email VARCHAR(255) NOT NULL,
---     password_hash VARCHAR(255) NOT NULL,
---     display_name VARCHAR(100) NOT NULL,
---     username VARCHAR(50) NOT NULL,
---     avatar_url VARCHAR(500) NULL,
---     -- V4 新增：个人简介（最大 500 字符，可为空）
+--     email VARCHAR(255) NOT NULL COMMENT '邮箱，唯一，可用于登录',
+--     password_hash VARCHAR(255) NOT NULL COMMENT '密码哈希（bcrypt / passlib），不存明文',
+--     display_name VARCHAR(100) NOT NULL COMMENT '昵称，个人中心可修改',
+--     username VARCHAR(50) NOT NULL COMMENT '用户名，唯一，注册后不可修改',
+--     avatar_url VARCHAR(500) NULL COMMENT '头像地址：emoji / 外链 / 本地 /uploads/avatars/*',
+--     -- V4 新增：个人简介（最大 500 字符，NULL 表示未填写）
 --     bio VARCHAR(500) NULL COMMENT '个人简介',
 --
---     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+--     is_active BOOLEAN NOT NULL DEFAULT TRUE COMMENT '账号启用状态',
 --
---     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+--     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 --     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
---         ON UPDATE CURRENT_TIMESTAMP,
+--         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 --
 --     UNIQUE KEY uk_users_username (username),
 --     UNIQUE KEY uk_users_email (email)
 -- ) ENGINE=InnoDB
 --   DEFAULT CHARSET=utf8mb4
---   COLLATE=utf8mb4_0900_ai_ci;
+--   COLLATE=utf8mb4_0900_ai_ci
+--   COMMENT='用户表';
 --
 --
 -- -- ==========================================
--- -- V4 initialization completed
+-- -- 2. notes  笔记表
+-- --    V1 建表；V2 新增 format 列。
+-- --    硬删除：删除后不保留记录，历史活跃度由 user_activity 独立累计。
 -- -- ==========================================
+--
+-- CREATE TABLE notes (
+--     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '笔记 ID',
+--
+--     user_id BIGINT UNSIGNED NOT NULL COMMENT '所属用户 ID',
+--
+--     title VARCHAR(255) NOT NULL COMMENT '标题',
+--     content LONGTEXT NOT NULL COMMENT '正文（markdown 或纯文本）',
+--     -- V2 新增：内容格式，markdown 需解析可预览 / text 纯文本
+--     format VARCHAR(16) NOT NULL DEFAULT 'markdown' COMMENT '内容格式：markdown / text',
+--
+--     is_pinned BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否置顶',
+--
+--     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+--     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+--         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+--
+--     KEY idx_notes_user_id (user_id),
+--     KEY idx_notes_created_at (created_at),
+--
+--     CONSTRAINT fk_notes_users
+--         FOREIGN KEY (user_id)
+--         REFERENCES users(id)
+--         ON DELETE CASCADE
+-- ) ENGINE=InnoDB
+--   DEFAULT CHARSET=utf8mb4
+--   COLLATE=utf8mb4_0900_ai_ci
+--   COMMENT='笔记表';
+--
+--
+-- -- ==========================================
+-- -- 3. tags  标签表
+-- --    V1 建表，沿用至今；每个用户自己的标签名唯一。
+-- -- ==========================================
+--
+-- CREATE TABLE tags (
+--     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '标签 ID',
+--
+--     user_id BIGINT UNSIGNED NOT NULL COMMENT '所属用户 ID',
+--
+--     name VARCHAR(50) NOT NULL COMMENT '标签名（同用户内唯一）',
+--     color VARCHAR(20) NULL COMMENT '标签颜色（如 #9A8052）',
+--
+--     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+--
+--     UNIQUE KEY uk_tags_user_name (user_id, name),
+--     KEY idx_tags_user_id (user_id),
+--
+--     CONSTRAINT fk_tags_users
+--         FOREIGN KEY (user_id)
+--         REFERENCES users(id)
+--         ON DELETE CASCADE
+-- ) ENGINE=InnoDB
+--   DEFAULT CHARSET=utf8mb4
+--   COLLATE=utf8mb4_0900_ai_ci
+--   COMMENT='标签表';
+--
+--
+-- -- ==========================================
+-- -- 4. note_tags  笔记-标签关联表（多对多）
+-- --    V1 建表，沿用至今；联合主键防止重复关联。
+-- -- ==========================================
+--
+-- CREATE TABLE note_tags (
+--     note_id BIGINT UNSIGNED NOT NULL COMMENT '笔记 ID',
+--     tag_id BIGINT UNSIGNED NOT NULL COMMENT '标签 ID',
+--
+--     PRIMARY KEY (note_id, tag_id),
+--
+--     KEY idx_note_tags_tag_id (tag_id),
+--
+--     CONSTRAINT fk_note_tags_notes
+--         FOREIGN KEY (note_id)
+--         REFERENCES notes(id)
+--         ON DELETE CASCADE,
+--
+--     CONSTRAINT fk_note_tags_tags
+--         FOREIGN KEY (tag_id)
+--         REFERENCES tags(id)
+--         ON DELETE CASCADE
+-- ) ENGINE=InnoDB
+--   DEFAULT CHARSET=utf8mb4
+--   COLLATE=utf8mb4_0900_ai_ci
+--   COMMENT='笔记-标签关联表';
+--
+--
+-- -- ==========================================
+-- -- 5. attachments  附件表
+-- --    V1 建表，沿用至今；storage_key 全局唯一。
+-- -- ==========================================
+--
+-- CREATE TABLE attachments (
+--     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '附件 ID',
+--
+--     note_id BIGINT UNSIGNED NOT NULL COMMENT '所属笔记 ID',
+--
+--     original_filename VARCHAR(255) NOT NULL COMMENT '原始文件名',
+--     storage_key VARCHAR(500) NOT NULL COMMENT '存储键（全局唯一）',
+--     storage_provider VARCHAR(30) NOT NULL DEFAULT 'local' COMMENT '存储提供方：local 等',
+--
+--     mime_type VARCHAR(100) NULL COMMENT 'MIME 类型',
+--     size_bytes BIGINT UNSIGNED NOT NULL COMMENT '文件字节数',
+--
+--     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+--
+--     UNIQUE KEY uk_attachments_storage_key (storage_key),
+--     KEY idx_attachments_note_id (note_id),
+--
+--     CONSTRAINT fk_attachments_notes
+--         FOREIGN KEY (note_id)
+--         REFERENCES notes(id)
+--         ON DELETE CASCADE
+-- ) ENGINE=InnoDB
+--   DEFAULT CHARSET=utf8mb4
+--   COLLATE=utf8mb4_0900_ai_ci
+--   COMMENT='附件表';
+--
+--
+-- -- ==========================================
+-- -- 6. user_activity  用户每日活跃度（V3 新增）
+-- --    按 (user_id, stat_date) 唯一，写操作时按「业务日」累加，
+-- --    支撑面板的日历 / GitHub 风格热力图 / 活动时长统计。
+-- --    业务日由后端按固定 UTC+8 偏移计算（不依赖系统 tzdata）。
+-- -- ==========================================
+--
+-- CREATE TABLE user_activity (
+--     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY COMMENT '记录 ID',
+--
+--     user_id BIGINT UNSIGNED NOT NULL COMMENT '用户 ID',
+--     stat_date DATE NOT NULL COMMENT '业务日（Asia/Shanghai），后端统一计算',
+--
+--     notes_created INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当日新增笔记次数',
+--     notes_updated INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当日修改笔记次数（含置顶切换）',
+--     notes_deleted INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当日删除笔记次数',
+--     active_seconds INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '当日应用内活跃时长（秒）',
+--
+--     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+--     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+--         ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+--
+--     UNIQUE KEY uk_user_activity_user_date (user_id, stat_date),
+--     KEY idx_user_activity_date (stat_date),
+--
+--     CONSTRAINT fk_user_activity_users
+--         FOREIGN KEY (user_id)
+--         REFERENCES users(id)
+--         ON DELETE CASCADE
+-- ) ENGINE=InnoDB
+--   DEFAULT CHARSET=utf8mb4
+--   COLLATE=utf8mb4_0900_ai_ci
+--   COMMENT='用户每日活跃度（增/改/删点数 + 活跃时长）';
+--
+--
+-- -- ==========================================
+-- -- V4 initialization completed（6 张表全部就绪）
+-- -- ==========================================
+
+
+-- ==========================================
+-- 第三部分：升级后验证查询（注释，可选执行）
+-- ==========================================
+-- -- 3.1 确认 bio 列已存在（应返回 1 行：FIELD= bio）
+-- SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_COMMENT
+-- FROM information_schema.COLUMNS
+-- WHERE TABLE_SCHEMA = DATABASE()
+--   AND TABLE_NAME = 'users'
+--   AND COLUMN_NAME = 'bio';
+--
+-- -- 3.2 确认 6 张表齐全
+-- SELECT TABLE_NAME, TABLE_COMMENT
+-- FROM information_schema.TABLES
+-- WHERE TABLE_SCHEMA = DATABASE()
+-- ORDER BY TABLE_NAME;
+--
+-- -- 3.3 抽查用户资料（bio 为 NULL 表示旧用户尚未填写）
+-- SELECT id, username, display_name, avatar_url, bio, is_active
+-- FROM users
+-- ORDER BY id
+-- LIMIT 10;
