@@ -58,7 +58,7 @@
 --       1. request_message VARCHAR(200) NULL COMMENT '好友申请留言'
 --     支撑发起好友申请时附带的一句留言（NULL 表示未填写留言）。
 --     至此仍为 13 张表；V9 不新增表、不改动其它既有表结构。
---   V10 (本文件)
+--   V10 (sql/v10/sql_v10.sql)
 --     给 V9 已有的 notes 表新增 1 列，支持「公开笔记 / 笔记广场 / 笔友主页笔记展示」：
 --       1. is_public BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否公开笔记'
 --          默认私密；仅公开笔记出现在广场与笔友主页，并可查看只读详情。
@@ -640,12 +640,12 @@ DEALLOCATE PREPARE stmt;
 -- WHERE TABLE_SCHEMA = DATABASE()
 -- ORDER BY TABLE_NAME;
 --
--- -- 3.V10 确认 notes.is_public 列（应返回 is_public / tinyint(1) / NO / 0）
+-- -- 3.V10 确认 notes.is_public 列存在（应返回 1 行：is_public / tinyint(1) / NO / 0）
 -- SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
 -- FROM information_schema.COLUMNS
 -- WHERE TABLE_SCHEMA='hello_note' AND TABLE_NAME='notes' AND COLUMN_NAME='is_public';
 --
--- -- 3.2 确认 friendships.request_message 列存在（应返回 1 行）
+-- 3.2 确认 friendships.request_message 列存在（应返回 1 行）
 -- --     COLUMN_TYPE 应为 varchar(200)，IS_NULLABLE 应为 YES，
 -- --     COLUMN_COMMENT 应为「好友申请留言」。
 -- SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT
